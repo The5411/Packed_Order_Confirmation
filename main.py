@@ -19,9 +19,9 @@ ms_client = MintsoftOrderClient()
 try:
     
     status_id = 20
-    if datetime.now().minute < 30: # Si es la 1er ejecucion de la hora, 00 y 15
+    if datetime.now().minute < 30:
         now = datetime.now().replace(minute=0, second=0, microsecond=0)
-    else: # Para la 2da, 30 y 45
+    else:
         now = datetime.now().replace(minute=30, second=0, microsecond=0)
 
     since_updated = now + timedelta(minutes = 60) # Agrego 1h para que se ajuste al horario de Mintsoft
