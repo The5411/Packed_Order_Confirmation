@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from clients.MintsoftClient import MintsoftOrderClient
 import time
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -19,12 +20,15 @@ ms_client = MintsoftOrderClient()
 try:
     
     status_id = 20
-    if datetime.now().minute < 30:
-        now = datetime.now().replace(minute=0, second=0, microsecond=0)
-    else:
-        now = datetime.now().replace(minute=30, second=0, microsecond=0)
 
-    since_updated = now + timedelta(minutes = 60) # Agrego 1h para que se ajuste al horario de Mintsoft
+    uk_now = datetime.now(ZoneInfo("Europe/London"))
+
+    if uk_now.minute < 30:
+        now = uk_now.replace(minute=0, second=0, microsecond=0)
+    else:
+        now = uk_now.replace(minute=30, second=0, microsecond=0)
+
+    since_updated = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
     
     print(f"Consultando órdenes que hayan sido packeadas desde {since_updated}")
     clients = ms_client.get_clients()
