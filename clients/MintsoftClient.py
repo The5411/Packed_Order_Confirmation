@@ -47,7 +47,7 @@ class MintsoftOrderClient:
         url = f"{self.BASE_URL}/api/Order/List"
 
         if status_id is not None:
-            url += f"?OrderStatusId={status_id}&SinceLastUpdated={since_updated}"
+            url += f"?OrderStatusId={status_id}&WarehouseId=3&SinceLastUpdated={since_updated}"
             
         r = requests.get(
             url,

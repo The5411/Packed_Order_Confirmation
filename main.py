@@ -41,6 +41,9 @@ try:
     #Si tiene algo, es que hay nuevas ordenes en PACKED
     else:
         for order in new_packed_orders:
+            channelId=order.get("ChannelId")
+            if channelId not in [51, 52, 56, 55]:
+                continue
             order_id = order.get("ID")
             order_number = order.get("OrderNumber")
             order_client_id = order.get("ClientId")
