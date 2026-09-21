@@ -45,55 +45,65 @@ class MintsoftOrderClient:
 
     PAGE_SIZE = 100
 
+    def _get_orders_page(self, params: Dict[str, Any], page_no: int) -> List[Dict[str, Any]]:
+        r = requests.get(
+            f"{self.BASE_URL}/api/Order/List",
+            headers=self.headers(),
+            params={**params, "PageNo": page_no},
+            timeout=30,
+        )
+
+        r.raise_for_status()
+        return r.json()
+
     def get_orders(self, since_updated, status_id: Optional[int] = None,
-                   warehouse_id: int = 3) -> List[Dict[str, Any]]:
-        """Devuelve TODAS las ordenes en una sola lista, juntando las paginas.
+                   warehouse_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+        """Devuelve TODAS las ordenes en una sola lista.
 
         /api/Order/List corta en 100 filas por pagina. Ignora PageNumber,
         PageSize, Limit y Take: el unico parametro que funciona es PageNo,
-        que arranca en 1. Se itera hasta que una pagina viene vacia o
-        incompleta.
+        que arranca en 1. Ademas acepta un solo WarehouseId por consulta,
+        asi que si se piden varios almacenes hay que consultarlos de a uno
+        y juntar los resultados.
         """
-        url = f"{self.BASE_URL}/api/Order/List"
-
-        params: Dict[str, Any] = {"SinceLastUpdated": since_updated}
+        base: Dict[str, Any] = {"SinceLastUpdated": since_updated}
         if status_id is not None:
-            params["OrderStatusId"] = status_id
-            params["WarehouseId"] = warehouse_id
+            base["OrderStatusId"] = status_id
+
+        if warehouse_ids:
+            consultas = [{**base, "WarehouseId": wh} for wh in warehouse_ids]
+        else:
+            consultas = [base]
 
         todas: List[Dict[str, Any]] = []
         vistos = set()
-        page_no = 1
 
-        while True:
-            r = requests.get(
-                url,
-                headers=self.headers(),
-                params={**params, "PageNo": page_no},
-                timeout=30,
-            )
+        for params in consultas:
+            wh = params.get("WarehouseId")
+            etiqueta = f"WarehouseId={wh}" if wh is not None else "todos los almacenes"
+            page_no = 1
 
-            r.raise_for_status()
-            pagina = r.json()
+            while True:
+                pagina = self._get_orders_page(params, page_no)
 
-            if not pagina:
-                break
+                if not pagina:
+                    break
 
-            # Si una orden se actualiza mientras paginamos, el orden de las
-            # filas se corre y puede repetirse alguna entre paginas.
-            nuevas = [o for o in pagina if o.get("ID") not in vistos]
-            vistos.update(o.get("ID") for o in nuevas)
-            todas.extend(nuevas)
+                # Si una orden se actualiza mientras paginamos, el orden de
+                # las filas se corre y puede repetirse alguna entre paginas.
+                nuevas = [o for o in pagina if o.get("ID") not in vistos]
+                vistos.update(o.get("ID") for o in nuevas)
+                todas.extend(nuevas)
 
-            print(f"  PageNo={page_no}: {len(pagina)} filas ({len(nuevas)} nuevas)")
+                print(f"  {etiqueta} PageNo={page_no}: {len(pagina)} filas ({len(nuevas)} nuevas)")
 
-            # Una pagina incompleta ya es la ultima
-            if len(pagina) < self.PAGE_SIZE:
-                break
+                # Una pagina incompleta ya es la ultima
+                if len(pagina) < self.PAGE_SIZE:
+                    break
 
-            page_no += 1
+                page_no += 1
 
-        print(f"  Total: {len(todas)} ordenes en {page_no} pagina(s)")
+        print(f"  Total: {len(todas)} ordenes")
         return todas
 
     def get_clients(self) -> List[Dict[str, Any]]:
