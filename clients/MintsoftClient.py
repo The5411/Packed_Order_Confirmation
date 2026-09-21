@@ -33,7 +33,6 @@ class MintsoftOrderClient:
 
         r = requests.post(url, json=payload, timeout=30)
         r.raise_for_status()
-        print(r.json())
         return r.json()
 
     def headers(self) -> Dict[str, str]:
