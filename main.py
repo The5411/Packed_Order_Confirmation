@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 load_dotenv()
 
 CLIENT = WebClient(token= os.getenv("SLACK_TOKEN"))
-CHANNEL = "C0ASH80L065"
+CHANNEL = os.getenv("ID_CANAL_DE_SLACK", "C0ASH80L065")
 
 # Solo se avisan las ordenes del canal Pickandpack Boutique. El filtro se
 # hace en la consulta a Mintsoft (/api/Order/List acepta ChannelId) y no
