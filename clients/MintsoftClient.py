@@ -56,7 +56,8 @@ class MintsoftOrderClient:
         return r.json()
 
     def get_orders(self, since_updated, status_id: Optional[int] = None,
-                   warehouse_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+                   warehouse_ids: Optional[List[int]] = None,
+                   channel_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Devuelve TODAS las ordenes en una sola lista.
 
         /api/Order/List corta en 100 filas por pagina. Ignora PageNumber,
@@ -68,6 +69,8 @@ class MintsoftOrderClient:
         base: Dict[str, Any] = {"SinceLastUpdated": since_updated}
         if status_id is not None:
             base["OrderStatusId"] = status_id
+        if channel_id is not None:
+            base["ChannelId"] = channel_id
 
         if warehouse_ids:
             consultas = [{**base, "WarehouseId": wh} for wh in warehouse_ids]

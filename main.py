@@ -14,31 +14,19 @@ load_dotenv()
 CLIENT = WebClient(token= os.getenv("SLACK_TOKEN"))
 CHANNEL = "C0ASH80L065"
 
-# Canales de wholesale. Todo lo que entre por aca va al canal de Slack,
-# sea el cliente que sea. El objetivo del canal es avisarle al equipo de
-# wholesale cuando termino el packing, asi que los canales de ecommerce
-# (Shopify, Amazon, Manual Input Ecommerce, ShipStation Ecommerce, etc.)
-# quedan afuera a proposito.
-WHOLESALE_CHANNELS = {
-    51: "Boutique",
-    52: "Major",
-    55: "Xorosoft",
-    56: "Manual Input Wholesale",
-    59: "ShipStation Wholesale",
-}
+# Solo se avisan las ordenes del canal Pickandpack Boutique. El filtro se
+# hace en la consulta a Mintsoft (/api/Order/List acepta ChannelId) y no
+# por almacen, asi entra cualquier orden de Boutique sin importar desde que
+# almacen salga.
+BOUTIQUE_CHANNEL_ID = 51
+BOUTIQUE_CHANNEL_NAME = "Pickandpack Boutique"
 
-# Almacenes de wholesale. La API acepta un WarehouseId por consulta, asi
-# que se consultan de a uno y se juntan. Ecommerce (5) queda afuera.
-WHOLESALE_WAREHOUSES = {
+# Nombres de almacen para el mensaje de Slack.
+WAREHOUSES = {
     3: "General / Wholesale",
+    5: "Ecommerce",
     6: "Majors",
     7: "ATS",
-}
-
-# Excepciones por cliente: pares (ClientId, ChannelId) que son wholesale
-# aunque el canal no sea de wholesale para el resto de los clientes.
-CLIENT_CHANNEL_EXCEPTIONS = {
-    (68, 48): "ByTimo - wholesale por ShipStation",
 }
 
 
@@ -139,14 +127,9 @@ def calcular_desde(last_run, ahora):
     return max(desde, piso)
 
 
-def es_wholesale(order):
-    """True si la orden le corresponde al equipo de wholesale."""
-    channel_id = order.get("ChannelId")
-
-    if channel_id in WHOLESALE_CHANNELS:
-        return True
-
-    return (order.get("ClientId"), channel_id) in CLIENT_CHANNEL_EXCEPTIONS
+def es_boutique(order):
+    """True si la orden es del canal Pickandpack Boutique."""
+    return order.get("ChannelId") == BOUTIQUE_CHANNEL_ID
 
 
 def _num(valor):
@@ -181,8 +164,8 @@ def linea_caja(caja):
 def armar_mensaje(order, client_name, cajas):
     """Devuelve (texto plano, blocks) para Slack."""
     order_number = order.get("OrderNumber")
-    canal = WHOLESALE_CHANNELS.get(order.get("ChannelId"), f"Canal {order.get('ChannelId')}")
-    almacen = WHOLESALE_WAREHOUSES.get(order.get("WarehouseId"), f"Almacen {order.get('WarehouseId')}")
+    canal = BOUTIQUE_CHANNEL_NAME
+    almacen = WAREHOUSES.get(order.get("WarehouseId"), f"Almacen {order.get('WarehouseId')}")
 
     # El peso de la orden suele venir en 0 aunque las cajas tengan peso, asi
     # que se prioriza la suma de las cajas.
@@ -262,7 +245,7 @@ try:
     print(f"Consultando órdenes que hayan sido packeadas desde {since_updated}")
     clientes_por_id = {c.get("ID"): c.get("Name") for c in ms_client.get_clients()}
     new_packed_orders = ms_client.get_orders(
-        since_updated, status_id, warehouse_ids=list(WHOLESALE_WAREHOUSES)
+        since_updated, status_id, channel_id=BOUTIQUE_CHANNEL_ID
     )
 
     # Si esta vacio, significa no hay nuevas ordenes PACKED
@@ -278,10 +261,11 @@ try:
 
             # Una orden que falla no puede cortar el resto del lote
             try:
-                if not es_wholesale(order):
+                # La API ya filtra por canal; esto es por las dudas.
+                if not es_boutique(order):
                     print(
                         f"Salteada {order_number}: ChannelId={order.get('ChannelId')} "
-                        f"no es de wholesale (ClientId={order.get('ClientId')})"
+                        f"no es {BOUTIQUE_CHANNEL_NAME}"
                     )
                     continue
 
