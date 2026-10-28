@@ -119,6 +119,26 @@ class MintsoftOrderClient:
         
         return r.json()
 
+    def get_box_packing_list(self, order_id: int) -> List[Dict[str, Any]]:
+        """Devuelve las cajas de una orden packeada.
+
+        Cada caja trae BoxNumber, Weight, Height/Length/Depth e Items (SKU,
+        Name, Quantity). Si el pedido falla devuelve lista vacia para que
+        la orden se avise igual, sin el detalle de cajas.
+        """
+        r = requests.get(
+            f"{self.BASE_URL}/api/Order/{order_id}/BoxPackingList",
+            headers=self.headers(),
+            timeout=30,
+        )
+
+        if not r.ok:
+            print(f"Error HTTP {r.status_code} al buscar las cajas de la orden {order_id}")
+            return []
+
+        data = r.json()
+        return (data or {}).get("Boxes") or []
+
     def get_client(self, client_id: int) -> Optional[Dict[str, Any]]:
         """Trae un cliente puntual.
 

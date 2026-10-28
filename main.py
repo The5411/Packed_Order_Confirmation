@@ -149,6 +149,82 @@ def es_wholesale(order):
     return (order.get("ClientId"), channel_id) in CLIENT_CHANNEL_EXCEPTIONS
 
 
+def _num(valor):
+    """Formatea pesos y medidas sin decimales de mas (5.00 -> 5, 7.5 -> 7.5)."""
+    return f"{float(valor or 0):g}"
+
+
+def destinatario(order):
+    """Nombre del cliente final de la orden: empresa o, si no hay, la persona."""
+    empresa = (order.get("CompanyName") or "").strip()
+    if empresa:
+        return empresa
+    persona = f"{order.get('FirstName') or ''} {order.get('LastName') or ''}".strip()
+    return persona or "-"
+
+
+def linea_caja(caja):
+    """Una linea por caja: cantidad de items, peso y medidas."""
+    unidades = sum(i.get("Quantity") or 0 for i in caja.get("Items") or [])
+    skus = len(caja.get("Items") or [])
+    linea = f"• Caja {caja.get('BoxNumber')}: {unidades} items ({skus} SKU{'s' if skus != 1 else ''})"
+
+    peso = caja.get("Weight") or 0
+    linea += f" | {_num(peso)} kg" if peso else " | peso sin cargar"
+
+    medidas = [caja.get("Length"), caja.get("Height"), caja.get("Depth")]
+    if all(medidas):
+        linea += f" | {' x '.join(_num(m) for m in medidas)} cm"
+    return linea
+
+
+def armar_mensaje(order, client_name, cajas):
+    """Devuelve (texto plano, blocks) para Slack."""
+    order_number = order.get("OrderNumber")
+    canal = WHOLESALE_CHANNELS.get(order.get("ChannelId"), f"Canal {order.get('ChannelId')}")
+    almacen = WHOLESALE_WAREHOUSES.get(order.get("WarehouseId"), f"Almacen {order.get('WarehouseId')}")
+
+    # El peso de la orden suele venir en 0 aunque las cajas tengan peso, asi
+    # que se prioriza la suma de las cajas.
+    peso_cajas = sum(c.get("Weight") or 0 for c in cajas)
+    peso_total = peso_cajas or order.get("TotalWeight") or 0
+    total_cajas = len(cajas) or order.get("NumberOfParcels") or 0
+
+    texto = (
+        f"Orden: {order_number} | Cliente: {client_name} | "
+        f"Items: {order.get('TotalItems')} | Cajas: {total_cajas} | Peso: {_num(peso_total)} kg"
+    )
+
+    campos = [
+        f"*Cliente:*\n{client_name}",
+        f"*Destinatario:*\n{destinatario(order)}",
+        f"*Canal:*\n{canal}",
+        f"*Almacen:*\n{almacen}",
+        f"*Items:*\n{order.get('TotalItems')}",
+        f"*Cajas:*\n{total_cajas}",
+        f"*Peso total:*\n{_num(peso_total)} kg" if peso_total else "*Peso total:*\nsin cargar",
+        f"*Courier:*\n{order.get('CourierServiceName') or '-'}",
+    ]
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"📦 Orden {order_number} packeada"}},
+        {"type": "section", "fields": [{"type": "mrkdwn", "text": c} for c in campos]},
+    ]
+
+    if cajas:
+        detalle = "\n".join(linea_caja(c) for c in sorted(cajas, key=lambda c: c.get("BoxNumber") or 0))
+        # Slack corta los textos de section en 3000 caracteres
+        if len(detalle) > 2900:
+            detalle = detalle[:2900].rsplit("\n", 1)[0] + "\n…"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Detalle por caja:*\n{detalle}"}})
+    else:
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": "Sin detalle de cajas en Mintsoft"}
+        ]})
+
+    return texto, blocks
+
+
 enviadas, last_run = cargar_estado()
 print(f"{len(enviadas)} ordenes ya avisadas en los ultimos {RETENTION_DAYS} dias")
 print(f"Ultima corrida OK: {last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'sin registro'}")
@@ -211,7 +287,6 @@ try:
 
                 order_id = str(order.get("ID"))
                 order_client_id = order.get("ClientId")
-                items = order.get("TotalItems")
 
                 #Si ya se envio un mensaje al canal para esa orden:
                 if order_id in enviadas:
@@ -219,10 +294,13 @@ try:
                     continue
 
                 client_name = nombre_cliente(order_client_id)
+                cajas = ms_client.get_box_packing_list(order.get("ID"))
+                texto, blocks = armar_mensaje(order, client_name, cajas)
 
                 CLIENT.chat_postMessage(
                     channel = CHANNEL,
-                    text = f"Orden: {order_number} | Cliente: {client_name} | Items: {items}"
+                    text = texto,
+                    blocks = blocks,
                 )
                 print(f"Mensaje enviado con exito para la orden {order_number}")
 
