@@ -6,3 +6,4 @@ requests
 slack_sdk
 urllib3
 tzdata
+redis

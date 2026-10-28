@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import redis
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
@@ -32,9 +33,40 @@ WAREHOUSES = {
 
 # Las ventanas de consulta se pisan (cada corrida pide los ultimos 30-60
 # min y la API no acepta cota superior), asi que la misma orden vuelve en
-# varias corridas. Para no avisar dos veces guardamos en disco los IDs ya
-# enviados. Se usa el ID interno de Mintsoft y no el OrderNumber, porque el
+# varias corridas. Para no avisar dos veces guardamos los IDs ya enviados.
+# Se usa el ID interno de Mintsoft y no el OrderNumber, porque el
 # OrderNumber se repite entre ordenes distintas.
+#
+# El estado va a Redis (REDIS_URL, en Railway apunta al servicio
+# Redis-packed). Si no hay REDIS_URL, por ejemplo corriendo local, se usa
+# un archivo JSON.
+REDIS_PREFIX = "packed_boutique"
+REDIS_KEY_LAST_RUN = f"{REDIS_PREFIX}:last_run"
+
+
+def _conectar_redis():
+    """Devuelve el cliente de Redis, o None si no hay REDIS_URL.
+
+    Si hay URL pero Redis no responde, se corta la corrida: seguir con un
+    archivo en un contenedor efimero haria que se repitan los avisos.
+    """
+    url = os.getenv("REDIS_URL", "")
+    if not url.startswith(("redis://", "rediss://")):
+        if url:
+            print("REDIS_URL no es una URL de Redis valida; se usa el archivo de estado")
+        return None
+
+    cliente = redis.Redis.from_url(url, decode_responses=True, socket_timeout=10)
+    cliente.ping()
+    return cliente
+
+
+def _clave_orden(order_id):
+    return f"{REDIS_PREFIX}:sent:{order_id}"
+
+
+REDIS = _conectar_redis()
+
 def _ruta_estado():
     """Donde guardar el estado entre corridas.
 
@@ -67,8 +99,29 @@ OVERLAP_MINUTES = 5                  # margen por si una orden cae justo en el b
 MAX_LOOKBACK_DAYS = RETENTION_DAYS   # mas atras que esto ya no se puede deduplicar
 
 
+def _cargar_estado_redis():
+    # Cada orden es una clave propia que vence sola a los RETENTION_DAYS
+    claves = list(REDIS.scan_iter(match=_clave_orden("*"), count=500))
+    valores = REDIS.mget(claves) if claves else []
+    enviadas = {
+        clave.rsplit(":", 1)[1]: valor
+        for clave, valor in zip(claves, valores) if valor
+    }
+
+    last_run = REDIS.get(REDIS_KEY_LAST_RUN)
+    try:
+        last_run = datetime.fromisoformat(last_run) if last_run else None
+    except (TypeError, ValueError):
+        last_run = None
+
+    return enviadas, last_run
+
+
 def cargar_estado():
     """Devuelve (ids ya avisados, momento de la ultima corrida OK)."""
+    if REDIS:
+        return _cargar_estado_redis()
+
     try:
         with open(SENT_ORDERS_FILE) as f:
             guardado = json.load(f)
@@ -104,6 +157,12 @@ def cargar_estado():
 
 def guardar_estado(enviadas, last_run=None):
     """Escribe el estado de forma atomica para no corromperlo si se corta."""
+    if REDIS:
+        # Las ordenes ya se guardan de a una en marcar_enviada
+        if last_run is not None:
+            REDIS.set(REDIS_KEY_LAST_RUN, last_run.isoformat())
+        return
+
     carpeta = os.path.dirname(SENT_ORDERS_FILE) or "."
     datos = {"orders": enviadas}
     if last_run is not None:
@@ -115,6 +174,17 @@ def guardar_estado(enviadas, last_run=None):
         os.replace(tmp, SENT_ORDERS_FILE)
     except OSError as e:
         print(f"No se pudo guardar {SENT_ORDERS_FILE}: {e}")
+
+
+def marcar_enviada(enviadas, order_id, last_run):
+    """Registra la orden como avisada apenas sale el mensaje."""
+    enviado_en = datetime.now(ZoneInfo("Europe/London")).isoformat()
+    enviadas[order_id] = enviado_en
+
+    if REDIS:
+        REDIS.set(_clave_orden(order_id), enviado_en, ex=RETENTION_DAYS * 24 * 3600)
+    else:
+        guardar_estado(enviadas, last_run)
 
 
 def calcular_desde(last_run, ahora):
@@ -209,6 +279,7 @@ def armar_mensaje(order, client_name, cajas):
 
 
 enviadas, last_run = cargar_estado()
+print(f"Estado en {'Redis' if REDIS else SENT_ORDERS_FILE}")
 print(f"{len(enviadas)} ordenes ya avisadas en los ultimos {RETENTION_DAYS} dias")
 print(f"Ultima corrida OK: {last_run.strftime('%Y-%m-%d %H:%M:%S') if last_run else 'sin registro'}")
 
@@ -290,8 +361,7 @@ try:
 
                 # Se guarda en el momento: si la corrida se corta a la mitad,
                 # lo ya avisado no se repite en la proxima.
-                enviadas[order_id] = datetime.now(ZoneInfo("Europe/London")).isoformat()
-                guardar_estado(enviadas, last_run)
+                marcar_enviada(enviadas, order_id, last_run)
                 time.sleep(1)
 
             except SlackApiError as e:
